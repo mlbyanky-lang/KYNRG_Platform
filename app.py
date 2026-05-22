@@ -5,25 +5,46 @@ import random
 st.set_page_config(page_title="김영편입 AI 통합 관리 시스템", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 깃허브 업로드 파일 다이렉트 연동 엔진
+# 0. 💥 깨진 인코딩 및 특수문자 완벽 방어 엔진 💥
 # ==========================================
 @st.cache_data
 def load_data(file_type, book_choice):
     try:
         if file_type == "뜻쓰기":
-            # 파일명: MVP1.csv / MVP2.csv
-            df = pd.read_csv(f"{book_choice}.csv")
-            if 'day' in df.columns: df.rename(columns={'day': 'DAY'}, inplace=True)
-            if 'day ' in df.columns: df.rename(columns={'day ': 'DAY'}, inplace=True)
-            return df
+            filename = f"{book_choice}.csv"
+            # utf-8-sig와 깨진 줄바꿈(\r)을 완벽히 흡수하여 읽어옵니다.
+            df = pd.read_csv(filename, encoding='utf-8-sig', on_bad_lines='skip')
+            
+            # 컬럼명의 공백과 대소문자를 강제로 초기화합니다.
+            df.columns = df.columns.str.strip().str.lower()
+            
+            # 시스템 규격에 맞게 컬럼명 재정의
+            if 'word' in df.columns and 'meaning' in df.columns:
+                # day 컬럼이 깨졌을 경우를 대비해 보정
+                day_col = [c for c in df.columns if 'day' in c]
+                if day_col:
+                    df.rename(columns={day_col[0]: 'DAY', 'word': 'word', 'meaning': 'meaning'}, inplace=True)
+                else:
+                    df['DAY'] = 'DAY 01' # 방어 코드
+                return df
+            else:
+                # 컬럼명이 아예 뭉개졌을 경우 강제로 인덱스로 매핑 (0번: DAY, 1번: 단어, 2번: 뜻)
+                df = pd.read_csv(filename, encoding='utf-8-sig', header=None, skiprows=1, on_bad_lines='skip')
+                df.columns = ['DAY', 'word', 'meaning'] + list(df.columns[3:])
+                return df
         else:
-            # 파일명: MVP1예문(Day1_60)_작업.xlsx - Vol.1 Day 1~30.csv
+            # 동의어 파일 연동 (특수문자 엑셀 규격 방어)
             filename = f"{book_choice}예문(Day1_60)_작업.xlsx - Vol.1 Day 1~30.csv"
-            df = pd.read_csv(filename)
-            if '데이' in df.columns: df.rename(columns={'데이': 'DAY'}, inplace=True)
+            df = pd.read_csv(filename, encoding='utf-8-sig', on_bad_lines='skip')
+            df.columns = df.columns.str.strip()
+            
+            # '데이' 또는 'day'로 시작하는 컬럼 강제 통일
+            day_col = [c for c in df.columns if '데이' in c or 'day' in c or 'DAY' in c]
+            if day_col: df.rename(columns={day_col[0]: 'DAY'}, inplace=True)
             return df
+            
     except Exception as e:
-        st.error(f"🚨 {book_choice} {file_type} 파일을 시스템 내에서 찾을 수 없습니다.")
+        st.error(f"🚨 {book_choice} 파일 가공 중 오류가 발생했습니다.")
         st.info(f"상세 원인: {e}")
         return pd.DataFrame()
 
@@ -56,7 +77,8 @@ elif menu == "📖 데일리 암기장":
     
     df = load_data("뜻쓰기", book_choice)
     if not df.empty:
-        df['DAY_NUM'] = df['DAY'].astype(str).str.extract(r'(\d+)').astype(int)
+        # 데이터 정제 (DAY 문자열에서 숫자만 추출)
+        df['DAY_NUM'] = df['DAY'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int)
         days = sorted(df['DAY_NUM'].unique())
         with col2: target_day = st.selectbox("📅 학습할 DAY 선택:", [f"DAY {d:02d}" for d in days])
         
@@ -86,7 +108,7 @@ elif menu == "📝 실전 단어 테스트":
                 
                 if not raw_df.empty:
                     if config['type'] == "뜻쓰기":
-                        raw_df['DAY_NUM'] = raw_df['DAY'].astype(str).str.extract(r'(\d+)').astype(int)
+                        raw_df['DAY_NUM'] = raw_df['DAY'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int)
                         filtered_df = raw_df[(raw_df['DAY_NUM'] >= config['start']) & (raw_df['DAY_NUM'] <= config['end'])]
                         
                         if len(filtered_df) == 0: st.error("범위 내 데이터 부족")
@@ -109,19 +131,23 @@ elif menu == "📝 실전 단어 테스트":
                                 st.balloons()
                                 st.success(f"💯 {s_name} 학생 제출 완료! 점수: {int((score/q_count)*100)}점")
                     
-                    else: # 동의어 예문 문맥형 시험
-                        raw_df['DAY_NUM'] = raw_df['DAY'].astype(str).str.extract(r'(\d+)').astype(int)
+                    else: # 동의어 시험
+                        raw_df['DAY_NUM'] = raw_df['DAY'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int)
                         filtered_df = raw_df[(raw_df['DAY_NUM'] >= config['start']) & (raw_df['DAY_NUM'] <= config['end'])]
                         
                         if len(filtered_df) == 0: st.error("범위 내 데이터 부족")
                         else:
                             q_count = min(30, len(filtered_df))
                             q_df = filtered_df.sample(n=q_count, random_state=42).reset_index(drop=True)
-                            all_synonyms = raw_df['동의어 1'].dropna().unique().tolist()
+                            
+                            # 동의어 컬럼 유연하게 매핑
+                            syn_col = [c for c in raw_df.columns if '동의어' in c][0]
+                            word_col = [c for c in raw_df.columns if '표제어' in c or 'word' in c or '단어' in c][0]
+                            all_synonyms = raw_df[syn_col].dropna().unique().tolist()
                             
                             score = 0
                             for idx, row in q_df.iterrows():
-                                target_word = str(row['표제어']) if '표제어' in row else ""
+                                target_word = str(row[word_col])
                                 sentence = str(row['예문'])
                                 if target_word and target_word in sentence:
                                     sentence = sentence.replace(target_word, f"<u><b>{target_word}</b></u>")
@@ -129,7 +155,7 @@ elif menu == "📝 실전 단어 테스트":
                                 st.markdown(f"##### Q{idx+1}. 다음 문맥상 밑줄 친 단어와 동의어를 고르시오.")
                                 st.markdown(f"> {sentence}", unsafe_allow_html=True)
                                 
-                                correct = row['동의어 1']
+                                correct = row[syn_col]
                                 distractors = random.sample([s for s in all_synonyms if s != correct], min(3, len(all_synonyms)-1))
                                 options = list(set([correct] + distractors))
                                 random.shuffle(options)
@@ -138,7 +164,7 @@ elif menu == "📝 실전 단어 테스트":
                                 st.divider()
                             if st.button("🎯 동의어 답안 제출"):
                                 st.balloons()
-                                st.success(f"💯 {s_name} 학생 제출 완료! Score: {int((score/q_count)*100)}점")
+                                st.success(f"💯 {s_name} 학생 제출 완료! 점수: {int((score/q_count)*100)}점")
 
 elif menu == "🔒 관리자 대시보드":
     st.title("🔒 원장님 전용 관리자 제어 대시보드")
@@ -160,5 +186,3 @@ elif menu == "🔒 관리자 대시보드":
             if st.button("🛑 현재 진행 중인 시험 강제 종료/마감"):
                 st.session_state.test_active = False
                 st.info("시험지가 회수되어 마감 처리되었습니다.")
-    elif pwd:
-        st.error("비밀번호가 일치하지 않습니다.")
