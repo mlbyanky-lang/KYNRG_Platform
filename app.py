@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 데이터 로드 엔진 (공백 및 인코딩 원천 차단)
+# 0. 데이터 로드 엔진
 # ==========================================
 @st.cache_data(ttl=60)
 def load_data(file_type, book_choice):
@@ -34,27 +34,25 @@ def load_data(file_type, book_choice):
     return df
 
 # ==========================================
-# ⚙️ 원장님 특제 알고리즘: 철자가 비슷한 단어(오답) 추적 엔진
+# ⚙️ 원장님 오답 공식: 철자/어근 유사 단어 조립기
 # ==========================================
 def get_similar_words(target_word, all_words_pool, count=3):
     target_word = str(target_word).strip().lower()
     if len(target_word) < 2:
         return random.sample(all_words_pool, min(count, len(all_words_pool)))
         
-    # 1차 필터: 앞 두 글자가 같은 단어들 수집 (예: ab-로 시작하는 단어들)
+    # 앞 두 글자가 일치하는 매력적인 편입형 오답 매칭
     prefix = target_word[:2]
     candidates = [w for w in all_words_pool if str(w).strip().lower().startswith(prefix) and str(w).strip().lower() != target_word]
     
-    # 2차 필터: 만약 앞 글자 일치 단어가 부족하면 길이(Length)가 비슷한 단어로 수집
+    # 단어 풀이 모자라면 철자 길이가 비슷한 녀석들로 보충
     if len(candidates) < count:
         candidates += [w for w in all_words_pool if abs(len(str(w)) - len(target_word)) <= 2 and w not in candidates and str(w).strip().lower() != target_word]
         
-    # 3차 필터: 그래도 부족하면 전체 풀에서 셔플
     if len(candidates) < count:
         candidates += [w for w in all_words_pool if w not in candidates and str(w).strip().lower() != target_word]
         
-    # 공백 제거 및 고유값 추출 후 개수만큼 바인딩
-    candidates = list(set([str(c).strip() for c in candidates if pd.notna(c)]))
+    candidates = list(set([str(c).strip() for c in candidates if pd.notna(c) and str(c).strip() != ""]))
     return random.sample(candidates, min(count, len(candidates)))
 
 # ==========================================
@@ -144,17 +142,25 @@ elif menu == "📝 실전 단어 테스트":
             if st.button("🚀 실시간 시험지 생성 및 시작"):
                 raw_df = load_data(config['type'], config['book'])
                 if not raw_df.empty:
+                    # 범위 필터링
                     filtered_df = raw_df[(raw_df['day'] >= config['start']) & (raw_df['day'] <= config['end'])]
                     
                     if len(filtered_df) == 0:
                         st.error("지정 범위 내에 단어 데이터가 부족합니다.")
                     else:
-                        q_count = min(config['num_q'], len(filtered_df))
-                        sampled_df = filtered_df.sample(n=q_count).reset_index(drop=True)
+                        # 🚨 [중요 변혁] 한 시험지 내 문제 단어(word) 중복을 원천 제거하기 위해 셔플 후 고유 단어 추출
+                        unique_words = filtered_df['word'].drop_duplicates().tolist()
+                        random.shuffle(unique_words)
+                        
+                        q_count = min(config['num_q'], len(unique_words))
+                        target_words_list = unique_words[:q_count]
+                        
+                        # 고유하게 선정된 단어들만 기반으로 행 추출
+                        sampled_df = pd.concat([filtered_df[filtered_df['word'] == w].sample(n=1) for w in target_words_list]).reset_index(drop=True)
                         
                         questions = []
                         
-                        # --- 유형 1: 뜻쓰기 객관식 시험지 빌드 ---
+                        # --- 유형 1: 뜻쓰기 객관식 시험지 ---
                         if config['type'] == "뜻쓰기":
                             all_meanings = list(raw_df['meaning'].dropna().str.strip().unique())
                             for _, row in sampled_df.iterrows():
@@ -171,36 +177,33 @@ elif menu == "📝 실전 단어 테스트":
                                     'correct': correct
                                 })
                                 
-                        # --- 유형 2: 원장님 특제 문맥형 동의어 시험지 빌드 ---
+                        # --- 유형 2: 원장님 공식 문맥형 동의어 시험지 ---
                         else:
-                            # 오답용으로 쓸 전체 동의어 단어 리스트업 풀 구축
                             syn_cols = [c for c in raw_df.columns if 'synonym' in c]
-                            all_syns_pool = []
-                            for col in syn_cols:
-                                all_syns_pool += raw_df[col].dropna().str.strip().tolist()
-                            all_syns_pool = list(set(all_syns_pool))
+                            
+                            # 오답 보기용 넓은 단어 풀 빌드 (b열의 모든 단어 데이터 활용)
+                            all_words_pool = list(raw_df['word'].dropna().str.strip().unique())
                             
                             for _, row in sampled_df.iterrows():
-                                # 1. 해당 행에 존재하는 동의어(synonym 1~5) 목록 추려내기
+                                # 1. 행 내의 유효한 동의어 리스트 수집
                                 row_syns = []
                                 for col in syn_cols:
                                     if col in row and pd.notna(row[col]) and str(row[col]).strip() != "":
                                         row_syns.append(str(row[col]).strip())
                                 
-                                # 만약 동의어 데이터가 비어있다면 방어 코드 처리
                                 if not row_syns:
-                                    row_syns = ["N/A"]
+                                    row_syns = [str(row['word'])]
                                 
-                                # 2. [원장님 지시] 입력된 동의어들 중 랜덤하게 1개를 문제의 '정답'으로 추출
+                                # 2. 동의어 중 1개를 실시간 정답으로 무작위 채택
                                 correct = random.choice(row_syns)
                                 
-                                # 3. [원장님 지시] 정답 단어와 철자/어근이 닮은 매력적인 오답 3개 추적 추출
-                                wrong = get_similar_words(correct, all_syns_pool, count=3)
+                                # 3. 정답 단어와 닮은꼴 형태의 오답 3개 추적 조립 (원장님 아이디어)
+                                wrong = get_similar_words(correct, all_words_pool, count=3)
                                 
                                 options = [correct] + wrong
                                 random.shuffle(options)
                                 
-                                # 4. 예문에서 문제 단어 찾아서 밑줄 및 볼드체 강조 표시
+                                # 4. C열 예문 속 핵심 어휘 자동 하이라이트 (밑줄 + 볼드)
                                 word = str(row['word']).strip()
                                 sentence = str(row['example sentence'] if 'example sentence' in row else row['example_sentence']).strip()
                                 highlighted_sentence = re.sub(f"({re.escape(word)})", r"<u><b>\1</b></u>", sentence, flags=re.IGNORECASE)
@@ -325,7 +328,7 @@ elif menu == "🔒 원장님 전용 대시보드":
         with tab3:
             st.subheader("👨‍🎓 학원 학생 명부 & 반별 공지 일괄 제어")
             c_choice = st.selectbox("관리할 반 선택:", list(st.session_state.students_dict.keys()))
-            col1, col2 = st.columns(2)
+            col1, col2 = col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**[{c_choice}] 실시간 학생 명부 편집**")
                 current_students_str = "\n".join(st.session_state.students_dict[c_choice])
