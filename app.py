@@ -13,7 +13,6 @@ st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon=
 def load_data(file_type, book_choice):
     filename = f"{book_choice}_{file_type}.csv"
     try:
-        # 새로 가공된 깔끔한 csv 규격을 직접 연결합니다.
         df = pd.read_csv(filename, encoding='utf-8')
         return df
     except Exception as e:
@@ -37,7 +36,7 @@ if "announcements" not in st.session_state:
         "CLASS BJ": ["과제 제출 마감은 금일 오후 10시까지입니다."],
         "CLASS A": ["최상위권 특별 고난도 어휘 배포 자료를 수령하세요."]
     }
-# 실시간 미응시생 판별을 위한 반별 마스터 학생 리스트 (관리자 페이지에서 커스텀 수정 가능)
+
 if "students_dict" not in st.session_state:
     st.session_state.students_dict = {
         "CLASS E": ["김철수", "이영희", "박민수", "최재성", "정지원"],
@@ -53,7 +52,6 @@ if "current_questions" not in st.session_state: st.session_state.current_questio
 # ==========================================
 # 2. 사이드바 메뉴 대시보드
 # ==========================================
-st.sidebar.image("https://images.unsplash.com/photo-1546410531-bb4caa6b424d?auto=format&fit=crop&q=80&w=300", use_container_width=True)
 st.sidebar.title("🏫 김영편입 노량진")
 menu = st.sidebar.radio("📌 시스템 메뉴 선택", [
     "📢 반별 공지사항", 
@@ -68,11 +66,9 @@ st.sidebar.caption("© 2026 김영편입 AI 학습 관리 시스템")
 # 3. 메뉴별 기능 완벽 구현부
 # ==========================================
 
-# --- [메뉴 1] 반별 공지사항 ---
 if menu == "📢 반별 공지사항":
     st.title("📢 반별 학습 공지사항")
     student_class = st.selectbox("본인의 소속 반을 선택하세요:", list(st.session_state.students_dict.keys()))
-    
     st.subheader(f"✨ {student_class} 오늘의 공지 목록")
     notices = st.session_state.announcements.get(student_class, [])
     if notices:
@@ -81,7 +77,6 @@ if menu == "📢 반별 공지사항":
     else:
         st.write("현재 등록된 공지사항이 없습니다.")
 
-# --- [메뉴 2] 데일리 암기장 ---
 elif menu == "📖 데일리 암기장":
     st.title("📖 데일리 플래시 암기장")
     col1, col2 = st.columns(2)
@@ -89,18 +84,17 @@ elif menu == "📖 데일리 암기장":
     
     df = load_data("뜻쓰기", book_choice)
     if not df.empty:
-        days = sorted(df['day'].unique())
+        # 데이터 유실 방지 및 최소 1 보정
+        df['day_clean'] = df['day'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int).clip(lower=1)
+        days = sorted(df['day_clean'].unique())
         with col2: target_day = st.selectbox("📅 진도 DAY 선택:", [f"DAY {d:02d}" for d in days])
         
         target_num = int(target_day.split()[1])
-        day_df = df[df['day'] == target_num].reset_index(drop=True)
+        day_df = df[df['day_clean'] == target_num].reset_index(drop=True)
         
         st.success(f"🔥 {book_choice} - {target_day} 어휘 목록 (총 {len(day_df)}개 단어)")
-        
-        # 플래시카드 디자인 표출
         st.dataframe(day_df[['word', 'meaning']], use_container_width=True)
 
-# --- [메뉴 3] 실전 단어 테스트 (핵심 시험지 엔진) ---
 elif menu == "📝 실전 단어 테스트":
     st.title("📝 실전 데일리 단어 테스트")
     
@@ -110,26 +104,24 @@ elif menu == "📝 실전 단어 테스트":
         config = st.session_state.test_config
         st.info(f"🎯 **오늘의 활성 시험:** {config['book']} [{config['type']}] | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
         
-        # 학생 기본 정보 검증
         col1, col2 = st.columns(2)
         with col1: s_class = st.selectbox("소속 반 선택:", list(st.session_state.students_dict.keys()))
         with col2: s_name = st.selectbox("본인 이름 선택:", st.session_state.students_dict[s_class])
         
-        # 시험 생성 로직
         if not st.session_state.exam_started:
             if st.button("🚀 실시간 시험지 생성 및 시작"):
                 raw_df = load_data(config['type'], config['book'])
                 if not raw_df.empty:
-                    filtered_df = raw_df[(raw_df['day'] >= config['start']) & (raw_df['day'] <= config['end'])]
+                    raw_df['day_clean'] = raw_df['day'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int).clip(lower=1)
+                    filtered_df = raw_df[(raw_df['day_clean'] >= config['start']) & (raw_df['day_clean'] <= config['end'])]
                     
                     if len(filtered_df) == 0:
-                        st.error("지정 범위 내에 단어 데이터가 부족합니다. 원장님께 문의하세요.")
+                        st.error("지정 범위 내에 단어 데이터가 부족합니다.")
                     else:
                         q_count = min(config['num_q'], len(filtered_df))
                         sampled_df = filtered_df.sample(n=q_count).reset_index(drop=True)
                         
                         questions = []
-                        # 유형 1: 뜻 맞추기
                         if config['type'] == "뜻쓰기":
                             all_meanings = raw_df['meaning'].dropna().unique().tolist()
                             for _, row in sampled_df.iterrows():
@@ -143,7 +135,6 @@ elif menu == "📝 실전 단어 테스트":
                                     'options': options,
                                     'correct': correct
                                 })
-                        # 유형 2: 동의어 예문
                         else:
                             all_syns = raw_df['synonym 1'].dropna().unique().tolist()
                             for _, row in sampled_df.iterrows():
@@ -154,7 +145,6 @@ elif menu == "📝 실전 단어 테스트":
                                 
                                 word = str(row['word'])
                                 sentence = str(row['example sentence'])
-                                # 문맥 속 핵심 단어 대소문자 무시 밑줄 강조 처리
                                 highlighted_sentence = re.sub(f"({re.escape(word)})", r"<u><b>\1</b></u>", sentence, flags=re.IGNORECASE)
                                 
                                 questions.append({
@@ -168,38 +158,28 @@ elif menu == "📝 실전 단어 테스트":
                         st.session_state.exam_started = True
                         st.rerun()
         
-        # 시험지가 생성된 상태인 경우 렌더링
         if st.session_state.exam_started:
-            st.subheader(f"✍️ {s_name} 학생의 시험지 (중도 이탈 및 새로고침 금지)")
-            
-            # Streamlit 화면 튕김 현상을 완벽 차단하는 form 컴포넌트 사용
+            st.subheader(f"✍️ {s_name} 학생의 시험지")
             with st.form("exam_paper_form"):
                 student_answers = []
                 for i, q in enumerate(st.session_state.current_questions):
                     st.markdown(f"##### **[Q{i+1}]** {q['title']}")
                     if q['context']:
                         st.markdown(f"> {q['context']}", unsafe_allow_html=True)
-                    
                     user_ans = st.radio(f"보기 선택 (Q{i+1})", q['options'], key=f"ans_{i}", index=None, label_visibility="collapsed")
                     student_answers.append(user_ans)
                     st.divider()
                 
                 submit_exam = st.form_submit_button("🎯 최종 답안 제출 및 자동 채점")
-                
                 if submit_exam:
-                    # 빈 답안 체크
                     if None in student_answers:
-                        st.warning("⚠️ 아직 풀지 않은 문항이 있습니다. 모든 문제의 정답을 체크해 주세요.")
+                        st.warning("⚠️ 아직 풀지 않은 문항이 있습니다.")
                     else:
-                        # 채점
                         correct_count = 0
                         for u_a, q in zip(student_answers, st.session_state.current_questions):
-                            if u_a == q['correct']:
-                                correct_count += 1
+                            if u_a == q['correct']: correct_count += 1
                         
                         score = int((correct_count / len(student_answers)) * 100)
-                        
-                        # 성적 저장
                         new_result = {
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "class": s_class,
@@ -208,18 +188,13 @@ elif menu == "📝 실전 단어 테스트":
                             "score": score
                         }
                         st.session_state.exam_results.append(new_result)
-                        
                         st.balloons()
-                        st.success(f"💯 채점 완료! {s_name} 학생은 {len(student_answers)}문제 중 {correct_count}문제를 맞추어 총 **{score}점**입니다.")
-                        
-                        # 시험 세션 초기화
+                        st.success(f"💯 채점 완료! 점수: **{score}점**")
                         st.session_state.exam_started = False
                         st.session_state.current_questions = []
 
-# --- [메뉴 4] 원장님 전용 대시보드 ---
 elif menu == "🔒 원장님 전용 대시보드":
     st.title("🔒 원장님 전용 통합 관리 시스템")
-    
     if "admin_authenticated" not in st.session_state: st.session_state.admin_authenticated = False
     
     if not st.session_state.admin_authenticated:
@@ -237,12 +212,13 @@ elif menu == "🔒 원장님 전용 대시보드":
             
         tab1, tab2, tab3 = st.tabs(["📝 데일리 테스트 배포 설정", "📊 실시간 성적 및 미응시생 파악", "👨‍🎓 학생 명부 & 공지 제어"])
         
-        # Tab 1: 출제 컨트롤러
         with tab1:
             st.subheader("📢 실시간 데일리 테스트 출제 설정")
             b_type = st.selectbox("1. 시험 유형 선택", ["뜻 맞추기", "동의어 예문 문맥형"])
             book = st.selectbox("2. 대상 어휘 교재 선택", ["MVP1", "MVP2"])
-            start_day, end_day = st.slider("3. 출제 진도 범위 지정 (DAY)", 1, 60, (1, 2))
+            
+            # 💡 여기에서 최소값을 1로 강제 고정 보정했습니다.
+            start_day, end_day = st.slider("3. 출제 진도 범위 지정 (DAY)", min_value=1, max_value=60, value=(1, 10), step=1)
             num_q = st.number_input("4. 출제할 총 문제 문항 수 지정", min_value=5, max_value=100, value=20, step=5)
             
             col1, col2 = st.columns(2)
@@ -256,33 +232,27 @@ elif menu == "🔒 원장님 전용 대시보드":
                         "end": end_day,
                         "num_q": num_q
                     }
-                    st.success("✅ 실시간 시험 배포 성공! 이제 학생들이 [📝 실전 단어 테스트] 메뉴에서 응시 가능합니다.")
+                    st.success("✅ 실시간 시험 배포 성공!")
             with col2:
                 if st.button("🛑 현재 진행 중인 시험 마감 및 회수", use_container_width=True):
                     st.session_state.test_active = False
                     st.info("현재 배포 중인 시험이 마감되었습니다.")
         
-        # Tab 2: 성적 집계 및 실시간 미응시자 색출
         with tab2:
             st.subheader("📈 실시간 성적 분석 및 미응시생 현황")
-            
             if not st.session_state.exam_results:
-                st.info("아직 시험을 제출한 학생이 없습니다. 학생들이 제출하면 실시간 통계가 집계됩니다.")
+                st.info("아직 시험을 제출한 학생이 없습니다.")
             else:
                 res_df = pd.DataFrame(st.session_state.exam_results)
-                
-                # 반별 평균 점수 집계 및 그래프 시각화
                 avg_scores = res_df.groupby("class")["score"].mean().reset_index()
                 st.markdown("#### **📊 반별 실시간 테스트 평균 점수**")
                 st.bar_chart(data=avg_scores, x="class", y="score", use_container_width=True)
                 
-                # 미응시자 실시간 연산 로직
                 st.markdown("#### **🚨 반별 실시간 미응시자 리스트**")
                 target_class = st.selectbox("미응시자를 조회할 반을 선택하세요:", list(st.session_state.students_dict.keys()))
                 
                 all_class_students = st.session_state.students_dict[target_class]
                 submitted_students = res_df[res_df['class'] == target_class]['name'].tolist()
-                
                 unsubmitted_students = [student for student in all_class_students if student not in submitted_students]
                 
                 if unsubmitted_students:
@@ -290,19 +260,13 @@ elif menu == "🔒 원장님 전용 대시보드":
                 else:
                     st.success(f"✅ **{target_class} 전원 시험 응시 완료 완료!**")
                 
-                st.markdown("#### **📋 전체 누적 성적 기록표**")
                 st.dataframe(res_df, use_container_width=True)
-                
-                # 엑셀 다운로드용 변환 csv
                 csv_data = res_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(label="📥 전체 성적 데이터 엑셀(CSV) 다운로드", data=csv_data, file_name=f"Daily_Test_Results_{datetime.now().strftime('%m%d_%H%M')}.csv", mime="text/csv")
+                st.download_button(label="📥 전체 성적 데이터 엑셀(CSV) 다운로드", data=csv_data, file_name=f"Daily_Test_Results.csv", mime="text/csv")
         
-        # Tab 3: 학생 리스트 명부 등록 및 반별 공지 제어
         with tab3:
             st.subheader("👨‍🎓 학원 학생 명부 & 반별 공지 일괄 제어")
-            
             c_choice = st.selectbox("관리할 반 선택:", list(st.session_state.students_dict.keys()))
-            
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**[{c_choice}] 실시간 학생 명부 편집**")
@@ -310,7 +274,7 @@ elif menu == "🔒 원장님 전용 대시보드":
                 new_students_str = st.text_area("학생 이름을 한 줄에 한 명씩 입력하세요:", value=current_students_str, height=150)
                 if st.button(f"💾 {c_choice} 명부 업데이트"):
                     st.session_state.students_dict[c_choice] = [name.strip() for name in new_students_str.split("\n") if name.strip()]
-                    st.success(f"✅ {c_choice} 학생 명부가 성공적으로 업데이트되었습니다.")
+                    st.success(f"✅ 명부 업데이트 완료.")
             
             with col2:
                 st.markdown(f"**[{c_choice}] 새로운 공지사항 추가**")
@@ -318,10 +282,4 @@ elif menu == "🔒 원장님 전용 대시보드":
                 if st.button(f"📢 {c_choice} 공지 등록"):
                     if new_notice.strip():
                         st.session_state.announcements[c_choice].insert(0, new_notice.strip())
-                        st.success("✅ 공지사항이 학생 화면에 즉시 반영되었습니다.")
-                
-                with st.expander("현재 등록된 공지 삭제/관리"):
-                    for notice in st.session_state.announcements[c_choice]:
-                        if st.button(f"❌ 삭제: {notice[:15]}...", key=f"del_{notice}"):
-                            st.session_state.announcements[c_choice].remove(notice)
-                            st.rerun()
+                        st.success("✅ 공지가 등록되었습니다.")
