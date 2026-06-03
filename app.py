@@ -7,25 +7,44 @@ from datetime import datetime
 st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 정제형 내부 로컬 데이터 로드 엔진
+# 0. 💥 유령 데이터(0번) 원천 차단 로드 엔진 💥
 # ==========================================
 @st.cache_data(ttl=60)
 def load_data(file_type, book_choice):
     filename = f"{book_choice}_{file_type}.csv"
     try:
         df = pd.read_csv(filename, encoding='utf-8')
-        return df
-    except Exception as e:
+    except Exception:
         try:
             df = pd.read_csv(filename, encoding='utf-8-sig')
-            return df
-        except Exception as e2:
+        except Exception:
             st.error(f"🚨 {filename} 파일을 시스템 내부에서 찾을 수 없습니다.")
             return pd.DataFrame()
+            
+    if not df.empty:
+        try:
+            # 1. 컬럼명 양끝 공백 제거 및 소문자 통일 (정제 규격 일치)
+            df.columns = df.columns.str.strip().str.lower()
+            
+            # 동의어 파일의 'example sentence' 등 기둥명 매핑용 정제
+            df.rename(columns={'example sentence': 'example_sentence', 'synonym 1': 'synonym_1'}, inplace=True)
+            
+            # 2. 🚨 [핵심 방어] 원본 파일 맨 밑의 빈 행이나 누락된(NaN) day 값 제거
+            df = df.dropna(subset=['day'])
+            
+            # 3. day 값을 순수 정수형(int)으로 강제 변환
+            df['day'] = pd.to_numeric(df['day'], errors='coerce').fillna(1).astype(int)
+            
+            # 4. 🚨 [최종 차단] 빈 줄의 영향으로 발생한 0 이하의 쓰레기 데이터 행을 완벽히 삭제
+            df = df[df['day'] >= 1]
+            
+            return df.reset_index(drop=True)
+        except Exception as e:
+            st.error(f"🚨 데이터 정제 중 오류 발생: {e}")
+            return pd.DataFrame()
+    return df
 
-# ==========================================
-# 1. 전역 시스템 제어 및 DB 초기화 (Session State)
-# ==========================================
+# 관리자 배포용 세션 제어값 초기화
 if "test_active" not in st.session_state: st.session_state.test_active = False
 if "test_config" not in st.session_state: st.session_state.test_config = {}
 if "announcements" not in st.session_state:
@@ -50,7 +69,7 @@ if "exam_started" not in st.session_state: st.session_state.exam_started = False
 if "current_questions" not in st.session_state: st.session_state.current_questions = []
 
 # ==========================================
-# 2. 사이드바 메뉴 대시보드
+# 1. 사이드바 메뉴 대시보드
 # ==========================================
 st.sidebar.title("🏫 김영편입 노량진")
 menu = st.sidebar.radio("📌 시스템 메뉴 선택", [
@@ -63,7 +82,7 @@ st.sidebar.divider()
 st.sidebar.caption("© 2026 김영편입 AI 학습 관리 시스템")
 
 # ==========================================
-# 3. 메뉴별 기능 완벽 구현부
+# 2. 메뉴별 기능 완벽 구현부
 # ==========================================
 
 if menu == "📢 반별 공지사항":
@@ -84,13 +103,11 @@ elif menu == "📖 데일리 암기장":
     
     df = load_data("뜻쓰기", book_choice)
     if not df.empty:
-        # 데이터 유실 방지 및 최소 1 보정
-        df['day_clean'] = df['day'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int).clip(lower=1)
-        days = sorted(df['day_clean'].unique())
+        days = sorted(df['day'].unique())
         with col2: target_day = st.selectbox("📅 진도 DAY 선택:", [f"DAY {d:02d}" for d in days])
         
         target_num = int(target_day.split()[1])
-        day_df = df[df['day_clean'] == target_num].reset_index(drop=True)
+        day_df = df[df['day'] == target_num].reset_index(drop=True)
         
         st.success(f"🔥 {book_choice} - {target_day} 어휘 목록 (총 {len(day_df)}개 단어)")
         st.dataframe(day_df[['word', 'meaning']], use_container_width=True)
@@ -102,7 +119,7 @@ elif menu == "📝 실전 단어 테스트":
         st.warning("🔒 현재 활성화된 학원 시험이 없습니다. 원장님이 관리자 페이지에서 시험을 배포할 때까지 대기해 주세요.")
     else:
         config = st.session_state.test_config
-        st.info(f"🎯 **오늘의 활성 시험:** {config['book']} [{config['type']}] | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
+        st.info(f"🎯 **오늘의 활성 시험:** {config['book']} [{config['display_type']}] | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
         
         col1, col2 = st.columns(2)
         with col1: s_class = st.selectbox("소속 반 선택:", list(st.session_state.students_dict.keys()))
@@ -112,8 +129,7 @@ elif menu == "📝 실전 단어 테스트":
             if st.button("🚀 실시간 시험지 생성 및 시작"):
                 raw_df = load_data(config['type'], config['book'])
                 if not raw_df.empty:
-                    raw_df['day_clean'] = raw_df['day'].astype(str).str.extract(r'(\d+)').fillna(1).astype(int).clip(lower=1)
-                    filtered_df = raw_df[(raw_df['day_clean'] >= config['start']) & (raw_df['day_clean'] <= config['end'])]
+                    filtered_df = raw_df[(raw_df['day'] >= config['start']) & (raw_df['day'] <= config['end'])]
                     
                     if len(filtered_df) == 0:
                         st.error("지정 범위 내에 단어 데이터가 부족합니다.")
@@ -136,15 +152,15 @@ elif menu == "📝 실전 단어 테스트":
                                     'correct': correct
                                 })
                         else:
-                            all_syns = raw_df['synonym 1'].dropna().unique().tolist()
+                            all_syns = raw_df['synonym_1'].dropna().unique().tolist()
                             for _, row in sampled_df.iterrows():
-                                correct = row['synonym 1']
+                                correct = row['synonym_1']
                                 wrong = random.sample([s for s in all_syns if s != correct], min(3, len(all_syns)-1))
                                 options = [correct] + wrong
                                 random.shuffle(options)
                                 
                                 word = str(row['word'])
-                                sentence = str(row['example sentence'])
+                                sentence = str(row['example_sentence'])
                                 highlighted_sentence = re.sub(f"({re.escape(word)})", r"<u><b>\1</b></u>", sentence, flags=re.IGNORECASE)
                                 
                                 questions.append({
@@ -173,7 +189,7 @@ elif menu == "📝 실전 단어 테스트":
                 submit_exam = st.form_submit_button("🎯 최종 답안 제출 및 자동 채점")
                 if submit_exam:
                     if None in student_answers:
-                        st.warning("⚠️ 아직 풀지 않은 문항이 있습니다.")
+                        st.warning("⚠️ 아직 풀지 않은 문항이 있습니다. 모든 문제의 답을 체크해 주세요.")
                     else:
                         correct_count = 0
                         for u_a, q in zip(student_answers, st.session_state.current_questions):
@@ -217,7 +233,7 @@ elif menu == "🔒 원장님 전용 대시보드":
             b_type = st.selectbox("1. 시험 유형 선택", ["뜻 맞추기", "동의어 예문 문맥형"])
             book = st.selectbox("2. 대상 어휘 교재 선택", ["MVP1", "MVP2"])
             
-            # 💡 여기에서 최소값을 1로 강제 고정 보정했습니다.
+            # 💡 최소 범위를 1로 완벽히 제어하여 슬라이더 상에서 0이 표현되지 않게 차단합니다.
             start_day, end_day = st.slider("3. 출제 진도 범위 지정 (DAY)", min_value=1, max_value=60, value=(1, 10), step=1)
             num_q = st.number_input("4. 출제할 총 문제 문항 수 지정", min_value=5, max_value=100, value=20, step=5)
             
@@ -227,12 +243,13 @@ elif menu == "🔒 원장님 전용 대시보드":
                     st.session_state.test_active = True
                     st.session_state.test_config = {
                         "type": "뜻쓰기" if b_type == "뜻 맞추기" else "동의어",
+                        "display_type": b_type,
                         "book": book,
                         "start": start_day,
                         "end": end_day,
                         "num_q": num_q
                     }
-                    st.success("✅ 실시간 시험 배포 성공!")
+                    st.success("✅ 실시간 시험 배포 성공! 이제 학생들이 풀 수 있습니다.")
             with col2:
                 if st.button("🛑 현재 진행 중인 시험 마감 및 회수", use_container_width=True):
                     st.session_state.test_active = False
