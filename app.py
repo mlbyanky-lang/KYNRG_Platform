@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 데이터 로드 엔진 (공백/대소문자 완벽 가드)
+# 0. 데이터 로드 및 초강력 정제 가드 엔진
 # ==========================================
 @st.cache_data(ttl=60)
 def load_data(file_type, book_choice):
@@ -23,11 +23,21 @@ def load_data(file_type, book_choice):
             
     if not df.empty:
         try:
-            # 컬럼명 양끝 공백 제거 및 소문자 정형화
+            # 컬럼명 공백 제거 및 소문자 정형화
             df.columns = df.columns.str.strip().str.lower()
             df = df.dropna(subset=['day'])
             df['day'] = pd.to_numeric(df['day'], errors='coerce').fillna(1).astype(int)
             df = df[df['day'] >= 1]
+            
+            # [💥 특수 가드] 동의어 데이터 내부의 쉼표(,), 따옴표("), 공백 찌꺼기 완벽 도려내기
+            syn_cols = [c for c in df.columns if 'synonym' in c]
+            for col in syn_cols:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).str.replace(r'[",\s]', '', regex=True)
+                    df[col] = df[col].replace(['nan', 'none', ''], None)
+            
+            if 'word' in df.columns:
+                df['word'] = df['word'].astype(str).str.strip()
             return df.reset_index(drop=True)
         except Exception as e:
             st.error(f"🚨 데이터 가공 중 분석 오류 발생: {e}")
@@ -40,7 +50,9 @@ def load_data(file_type, book_choice):
 def get_similar_words(target_word, all_words_pool, count=3):
     target_word = str(target_word).strip().lower()
     if len(target_word) < 2:
-        return random.sample(all_words_pool, min(count, len(all_words_pool)))
+        # 풀이 완전히 비어있을 때를 대비한 안전 장치
+        safe_pool = [w for w in all_words_pool if pd.notna(w) and str(w).strip() != ""]
+        return random.sample(safe_pool, min(count, len(safe_pool))) if safe_pool else ["test1", "test2", "test3"]
         
     prefix = target_word[:2]
     candidates = [w for w in all_words_pool if str(w).strip().lower().startswith(prefix) and str(w).strip().lower() != target_word]
@@ -52,12 +64,15 @@ def get_similar_words(target_word, all_words_pool, count=3):
         candidates += [w for w in all_words_pool if w not in candidates and str(w).strip().lower() != target_word]
         
     candidates = list(set([str(c).strip() for c in candidates if pd.notna(c) and str(c).strip() != ""]))
-    return random.sample(candidates, min(count, len(candidates)))
+    if len(candidates) >= count:
+        return random.sample(candidates, count)
+    else:
+        # 방어용 코드
+        return (candidates + ["dummy1", "dummy2", "dummy3"])[:count]
 
 # ==========================================
 # 1. 시스템 전역 변수 및 세션 상태 초기화
 # ==========================================
-# 두 시험을 개별 제어하기 위해 상태 독립 분리
 if "mean_test_active" not in st.session_state: st.session_state.mean_test_active = False
 if "mean_test_config" not in st.session_state: st.session_state.mean_test_config = {}
 
@@ -87,7 +102,7 @@ if "current_questions" not in st.session_state: st.session_state.current_questio
 if "current_exam_type" not in st.session_state: st.session_state.current_exam_type = ""
 
 # ==========================================
-# 2. 사이드바 네비게이션 (이원화 메뉴 반영)
+# 2. 사이드바 네비게이션 (메뉴 이원화 분리)
 # ==========================================
 st.sidebar.title("🏫 김영편입 노량진")
 menu = st.sidebar.radio("📌 시스템 메뉴 선택", [
@@ -239,13 +254,17 @@ elif menu == "📝 실전 동의어 테스트":
                         
                         sampled_df = pd.concat([filtered_df[filtered_df['word'] == w].sample(n=1) for w in target_words]).reset_index(drop=True)
                         
-                        # 💡 [버그 대도려내기] 정형화된 이름으로 매칭 컬럼 추적
                         syn_cols = [c for c in raw_df.columns if 'synonym' in c]
                         all_words_pool = list(raw_df['word'].dropna().str.strip().unique())
                         
+                        # 오답 보기용 동의어 전체 풀도 정제해서 구축
+                        all_syns_pool = []
+                        for col in syn_cols:
+                            all_syns_pool += raw_df[col].dropna().tolist()
+                        all_syns_pool = list(set(all_syns_pool)) if all_syns_pool else all_words_pool
+                        
                         questions = []
                         for _, row in sampled_df.iterrows():
-                            # 유효 동의어 바인딩
                             row_syns = []
                             for col in syn_cols:
                                 if col in row and pd.notna(row[col]) and str(row[col]).strip() != "":
@@ -253,17 +272,17 @@ elif menu == "📝 실전 동의어 테스트":
                             
                             if not row_syns: row_syns = [str(row['word'])]
                             
-                            # 정답 무작위 1개 선정
                             correct = random.choice(row_syns)
-                            # 원장님 표 철자 유사 오답 매칭
-                            wrong = get_similar_words(correct, all_words_pool, count=3)
+                            wrong = get_similar_words(correct, all_syns_pool, count=3)
                             
                             options = [correct] + wrong
                             random.shuffle(options)
                             
                             # 하이라이트 문맥 가공
                             word = str(row['word']).strip()
-                            sentence = str(row['example sentence'] if 'example sentence' in row else row['example_sentence']).strip()
+                            # 동의어 파일에 존재 가능한 예문 컬럼명 유연 처리
+                            sentence_col = 'example sentence' if 'example sentence' in row.index else 'example_sentence'
+                            sentence = str(row[sentence_col]).strip()
                             highlighted_sentence = re.sub(f"({re.escape(word)})", r"<u><b>\1</b></u>", sentence, flags=re.IGNORECASE)
                             
                             questions.append({
@@ -306,7 +325,7 @@ elif menu == "📝 실전 동의어 테스트":
                         st.session_state.exam_started = False
                         st.session_state.current_questions = []
 
-# --- [메뉴 4] 원장님 전용 대시보드 (분리 제어판 적용) ---
+# --- [메뉴 4] 원장님 전용 대시보드 ---
 elif menu == "🔒 원장님 전용 대시보드":
     st.title("🔒 원장님 전용 통합 관리 시스템")
     if "admin_authenticated" not in st.session_state: st.session_state.admin_authenticated = False
@@ -325,7 +344,6 @@ elif menu == "🔒 원장님 전용 대시보드":
             
         tab1, tab2, tab3 = st.tabs(["📝 테스트 개별 배포 제어기", "📊 실시간 성적 및 미응시생 파악", "👨‍🎓 학생 명부 & 공지 제어"])
         
-        # Tab 1: 독립 배포기
         with tab1:
             col1, col2 = st.columns(2)
             with col1:
@@ -333,69 +351,4 @@ elif menu == "🔒 원장님 전용 대시보드":
                 m_book = st.selectbox("교재 선택 (뜻)", ["MVP1", "MVP2"])
                 m_start, m_end = st.slider("진도 범위 (뜻 DAY)", 1, 60, (1, 10), key="m_slide")
                 m_num = st.number_input("출제 문항 수 (뜻)", min_value=5, max_value=100, value=20, step=5, key="m_num")
-                if st.button("🚀 뜻찾기 시험 배포/활성화", use_container_width=True):
-                    st.session_state.mean_test_active = True
-                    st.session_state.mean_test_config = {"book": m_book, "start": m_start, "end": m_end, "num_q": m_num}
-                    st.success("뜻찾기 시험지가 오픈되었습니다.")
-                if st.button("🛑 뜻찾기 시험 마감/종료", use_container_width=True):
-                    st.session_state.mean_test_active = False
-                    st.info("뜻찾기 시험이 마감되었습니다.")
-                    
-            with col2:
-                st.subheader("🅱️ 동의어 문맥 테스트 실시간 설정")
-                s_book = st.selectbox("교재 선택 (동의어)", ["MVP1", "MVP2"])
-                s_start, s_end = st.slider("진도 범위 (동의어 DAY)", 1, 60, (1, 10), key="s_slide")
-                s_num = st.number_input("출제 문항 수 (동의어)", min_value=5, max_value=100, value=20, step=5, key="s_num")
-                if st.button("🚀 동의어 테스트 배포/활성화", use_container_width=True):
-                    st.session_state.syn_test_active = True
-                    st.session_state.syn_test_config = {"book": s_book, "start": s_start, "end": s_end, "num_q": s_num}
-                    st.success("동의어 문맥 시험지가 오픈되었습니다.")
-                if st.button("🛑 동의어 테스트 마감/종료", use_container_width=True):
-                    st.session_state.syn_test_active = False
-                    st.info("동의어 시험이 마감되었습니다.")
-        
-        # Tab 2: 미응시자 및 집계 분리
-        with tab2:
-            st.subheader("📈 실시간 성적 분석 및 시험별 미응시생 파악")
-            if not st.session_state.exam_results:
-                st.info("아직 제출된 시험 데이터가 없습니다.")
-            else:
-                res_df = pd.DataFrame(st.session_state.exam_results)
-                st.dataframe(res_df, use_container_width=True)
-                
-                # 미응시자 분리 색출
-                st.divider()
-                st.markdown("#### **🚨 반별/시험 종류별 실시간 미응시자 실시간 추적**")
-                chk_class = st.selectbox("조회할 반 선택:", list(st.session_state.students_dict.keys()))
-                chk_type = st.radio("조회할 시험 유형 선택:", ["뜻찾기", "동의어"])
-                
-                all_studs = st.session_state.students_dict[chk_class]
-                done_studs = res_df[(res_df['class'] == chk_class) & (res_df['type'] == chk_type)]['name'].tolist()
-                not_done = [s for s in all_studs if s not in done_studs]
-                
-                if not_done:
-                    st.error(f"❌ **{chk_class} - {chk_type} 미응시 학생 ({len(not_done)}명):** {', '.join(not_done)}")
-                else:
-                    st.success(f"✅ **{chk_class} 반은 현재 {chk_type} 시험을 전원 응시 완료했습니다!**")
-                
-                csv_data = res_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 전체 성적 엑셀 마스터 다운로드", data=csv_data, file_name="Noryangjin_LMS_Results.csv", mime="text/csv")
-        
-        # Tab 3: 명부 제어
-        with tab3:
-            c_choice = st.selectbox("관리할 반 선택:", list(st.session_state.students_dict.keys()), key="tab3_class")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**[{c_choice}] 학생 명부 편집**")
-                current_students_str = "\n".join(st.session_state.students_dict[c_choice])
-                new_students_str = st.text_area("이름을 한 줄에 한 명씩 입력:", value=current_students_str, height=150)
-                if st.button(f"💾 {c_choice} 명부 저장"):
-                    st.session_state.students_dict[c_choice] = [name.strip() for name in new_students_str.split("\n") if name.strip()]
-                    st.success("명부가 업데이트되었습니다.")
-            with col2:
-                st.markdown(f"**[{c_choice}] 새로운 실시간 공지 등록**")
-                new_notice = st.text_input("공지 내용:")
-                if st.button(f"📢 {c_choice} 공지 발행"):
-                    if new_notice.strip():
-                        st.session_state.announcements[c_choice].insert(0, new_notice.strip())
-                        st.success("공지가 실시간 반영되었습니다.")
+                if st.button("🚀 뜻찾기 시험 배포/활성화", use_container_
