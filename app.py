@@ -146,7 +146,6 @@ elif menu == "📝 실전 뜻찾기 테스트":
         st.warning("🔒 현재 활성화된 뜻찾기 시험이 없습니다. 원장님이 시험을 출제할 때까지 대기해 주세요.")
     else:
         config = st.session_state.mean_test_config
-        # 💡 [버그 수정] config에서 안전하게 정보를 호출하도록 보정
         st.info(f"🎯 **뜻찾기 활성 시험:** {config['book']} | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
         
         col1, col2 = st.columns(2)
@@ -224,7 +223,6 @@ elif menu == "📝 실전 동의어 테스트":
         st.warning("🔒 현재 활성화된 동의어 문맥 시험이 없습니다. 원장님이 시험을 출제할 때까지 대기해 주세요.")
     else:
         config = st.session_state.syn_test_config
-        # 💡 [버그 수정] config에서 안전하게 정보를 호출하도록 보정
         st.info(f"🎯 **동의어 활성 시험:** {config['book']} | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
         
         col1, col2 = st.columns(2)
@@ -355,4 +353,53 @@ elif menu == "🔒 원장님 전용 대시보드":
                 s_book = st.selectbox("교재 선택 (동의어)", ["MVP1", "MVP2"])
                 s_start, s_end = st.slider("진도 범위 (동의어 DAY)", 1, 60, (1, 10), key="s_slide")
                 s_num = st.number_input("출제 문항 수 (동의어)", min_value=5, max_value=100, value=20, step=5, key="s_num")
-                if st.button("
+                if st.button("🚀 동의어 테스트 배포/활성화", use_container_width=True):
+                    st.session_state.syn_test_active = True
+                    st.session_state.syn_test_config = {"book": s_book, "start": s_start, "end": s_end, "num_q": s_num}
+                    st.success("동의어 문맥 시험지가 오픈되었습니다.")
+                if st.button("🛑 동의어 테스트 마감/종료", use_container_width=True):
+                    st.session_state.syn_test_active = False
+                    st.info("동의어 시험이 마감되었습니다.")
+        
+        with tab2:
+            st.subheader("📈 실시간 성적 분석 및 시험별 미응시생 파악")
+            if not st.session_state.exam_results:
+                st.info("아직 제출된 시험 데이터가 없습니다.")
+            else:
+                res_df = pd.DataFrame(st.session_state.exam_results)
+                st.dataframe(res_df, use_container_width=True)
+                
+                st.divider()
+                st.markdown("#### **🚨 반별/시험 종류별 실시간 미응시자 실시간 추적**")
+                chk_class = st.selectbox("조회할 반 선택:", list(st.session_state.students_dict.keys()))
+                chk_type = st.radio("조회할 시험 유형 선택:", ["뜻찾기", "동의어"])
+                
+                all_studs = st.session_state.students_dict[chk_class]
+                done_studs = res_df[(res_df['class'] == chk_class) & (res_df['type'] == chk_type)]['name'].tolist()
+                not_done = [s for s in all_studs if s not in done_studs]
+                
+                if not_done:
+                    st.error(f"❌ **{chk_class} - {chk_type} 미응시 학생 ({len(not_done)}명):** {', '.join(not_done)}")
+                else:
+                    st.success(f"✅ **{chk_class} 반은 현재 {chk_type} 시험을 전원 응시 완료했습니다!**")
+                
+                csv_data = res_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 전체 성적 엑셀 마스터 다운로드", data=csv_data, file_name="Noryangjin_LMS_Results.csv", mime="text/csv")
+        
+        with tab3:
+            c_choice = st.selectbox("관리할 반 선택:", list(st.session_state.students_dict.keys()), key="tab3_class")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**[{c_choice}] 학생 명부 편집**")
+                current_students_str = "\n".join(st.session_state.students_dict[c_choice])
+                new_students_str = st.text_area("이름을 한 줄에 한 명씩 입력:", value=current_students_str, height=150)
+                if st.button(f"💾 {c_choice} 명부 저장"):
+                    st.session_state.students_dict[c_choice] = [name.strip() for name in new_students_str.split("\n") if name.strip()]
+                    st.success("명부가 업데이트되었습니다.")
+            with col2:
+                st.markdown(f"**[{c_choice}] 새로운 실시간 공지 등록**")
+                new_notice = st.text_input("공지 내용:")
+                if st.button(f"📢 {c_choice} 공지 발행"):
+                    if new_notice.strip():
+                        st.session_state.announcements[c_choice].insert(0, new_notice.strip())
+                        st.success("공지가 실시간 반영되었습니다.")
