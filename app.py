@@ -7,10 +7,11 @@ from datetime import datetime
 st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 데이터 로드 및 누락/특수문자 가드 엔진
+# 0. 데이터 로드 및 누락/특수문자 가드 엔진 (대소문자 무결점 고정)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_data(file_type, book_choice):
+    # 🚨 원장님 원본 파일의 대소문자 규격(MVP1_동의어.csv)을 강제로 100% 유지합니다.
     filename = f"{book_choice}_{file_type}.csv"
     try:
         df = pd.read_csv(filename, encoding='utf-8')
@@ -18,12 +19,12 @@ def load_data(file_type, book_choice):
         try:
             df = pd.read_csv(filename, encoding='utf-8-sig')
         except Exception:
-            st.error(f"🚨 {filename} 파일을 시스템 내부에서 찾을 수 없습니다.")
+            st.error(f"🚨 {filename} 파일을 시스템 내부에서 찾을 수 없습니다. 파일명을 확인해 주세요.")
             return pd.DataFrame()
             
     if not df.empty:
         try:
-            # 컬럼명 양끝 공백 제거 및 소문자 정형화
+            # 내부 데이터 컬럼명만 정형화 처리
             df.columns = df.columns.str.strip().str.lower()
             df = df.dropna(subset=['day'])
             df['day'] = pd.to_numeric(df['day'], errors='coerce').fillna(1).astype(int)
@@ -35,7 +36,7 @@ def load_data(file_type, book_choice):
     return df
 
 # ==========================================
-# ⚙️ 편입 최적화 오답 메이커 (중복 절대 불가능 시스템)
+# ⚙️ 편입 최적화 오답 메이커 (보기 중복 절대 불가능 안전장치)
 # ==========================================
 def build_quiz_options(correct_word, full_pool):
     correct_clean = str(correct_word).strip()
@@ -94,7 +95,7 @@ if "current_questions" not in st.session_state: st.session_state.current_questio
 if "current_exam_type" not in st.session_state: st.session_state.current_exam_type = ""
 
 # ==========================================
-# 2. 사이드바 네비게이션 (메뉴 완전 분리형)
+# 2. 사이드바 네비게이션 (뜻/동의어 상호 독립형)
 # ==========================================
 st.sidebar.title("🏫 김영편입 노량진")
 menu = st.sidebar.radio("📌 시스템 메뉴 선택", [
@@ -134,7 +135,6 @@ elif menu == "📖 데일리 암기장":
         
         target_num = int(target_day.split()[1])
         day_df = df[df['day'] == target_num].reset_index(drop=True)
-        
         st.success(f"🔥 {book_choice} - {target_day} 어휘 목록 (총 {len(day_df)}개 단어)")
         st.dataframe(day_df[['word', 'meaning']], use_container_width=True)
 
@@ -244,7 +244,6 @@ elif menu == "📝 실전 동의어 테스트":
                         target_words = unique_words[:q_count]
                         
                         sampled_df = pd.concat([filtered_df[filtered_df['word'] == w].sample(n=1) for w in target_words]).reset_index(drop=True)
-                        
                         syn_cols = [c for c in raw_df.columns if 'synonym' in c]
                         all_words_pool = list(raw_df['word'].dropna().str.strip().unique())
                         
@@ -263,9 +262,7 @@ elif menu == "📝 실전 동의어 테스트":
                                     if val.lower() not in ['nan', 'none', '']:
                                         row_syns.append(val)
                             
-                            if not row_syns: 
-                                row_syns = [str(row['word']).strip()]
-                            
+                            if not row_syns: row_syns = [str(row['word']).strip()]
                             correct = random.choice(row_syns)
                             options = build_quiz_options(correct, all_syns_pool)
                             
