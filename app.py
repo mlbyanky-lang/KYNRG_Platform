@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 정제형 내부 로컬 데이터 로드 엔진
+# 0. 데이터 로드 엔진 (공백 및 인코딩 원천 차단)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_data(file_type, book_choice):
@@ -23,11 +23,7 @@ def load_data(file_type, book_choice):
             
     if not df.empty:
         try:
-            # 1. 컬럼명 공백 제거 및 소문자 통일 (정제 규격 표준화)
             df.columns = df.columns.str.strip().str.lower()
-            df.rename(columns={'example sentence': 'example_sentence', 'synonym 1': 'synonym_1'}, inplace=True)
-            
-            # 2. 원본 파일 유령 데이터 제거 및 수치화
             df = df.dropna(subset=['day'])
             df['day'] = pd.to_numeric(df['day'], errors='coerce').fillna(1).astype(int)
             df = df[df['day'] >= 1]
@@ -38,7 +34,31 @@ def load_data(file_type, book_choice):
     return df
 
 # ==========================================
-# 1. 전역 시스템 제어 및 DB 초기화 (Session State)
+# ⚙️ 원장님 특제 알고리즘: 철자가 비슷한 단어(오답) 추적 엔진
+# ==========================================
+def get_similar_words(target_word, all_words_pool, count=3):
+    target_word = str(target_word).strip().lower()
+    if len(target_word) < 2:
+        return random.sample(all_words_pool, min(count, len(all_words_pool)))
+        
+    # 1차 필터: 앞 두 글자가 같은 단어들 수집 (예: ab-로 시작하는 단어들)
+    prefix = target_word[:2]
+    candidates = [w for w in all_words_pool if str(w).strip().lower().startswith(prefix) and str(w).strip().lower() != target_word]
+    
+    # 2차 필터: 만약 앞 글자 일치 단어가 부족하면 길이(Length)가 비슷한 단어로 수집
+    if len(candidates) < count:
+        candidates += [w for w in all_words_pool if abs(len(str(w)) - len(target_word)) <= 2 and w not in candidates and str(w).strip().lower() != target_word]
+        
+    # 3차 필터: 그래도 부족하면 전체 풀에서 셔플
+    if len(candidates) < count:
+        candidates += [w for w in all_words_pool if w not in candidates and str(w).strip().lower() != target_word]
+        
+    # 공백 제거 및 고유값 추출 후 개수만큼 바인딩
+    candidates = list(set([str(c).strip() for c in candidates if pd.notna(c)]))
+    return random.sample(candidates, min(count, len(candidates)))
+
+# ==========================================
+# 1. 전역 시스템 제어 및 DB 초기화
 # ==========================================
 if "test_active" not in st.session_state: st.session_state.test_active = False
 if "test_config" not in st.session_state: st.session_state.test_config = {}
@@ -77,10 +97,9 @@ st.sidebar.divider()
 st.sidebar.caption("© 2026 김영편입 AI 학습 관리 시스템")
 
 # ==========================================
-# 3. 메뉴별 기능 완벽 구현부
+# 3. 메뉴별 기능 구현부
 # ==========================================
 
-# --- [메뉴 1] 반별 공지사항 ---
 if menu == "📢 반별 공지사항":
     st.title("📢 반별 학습 공지사항")
     student_class = st.selectbox("본인의 소속 반을 선택하세요:", list(st.session_state.students_dict.keys()))
@@ -92,7 +111,6 @@ if menu == "📢 반별 공지사항":
     else:
         st.write("현재 등록된 공지사항이 없습니다.")
 
-# --- [메뉴 2] 데일리 암기장 ---
 elif menu == "📖 데일리 암기장":
     st.title("📖 데일리 플래시 암기장")
     col1, col2 = st.columns(2)
@@ -109,7 +127,6 @@ elif menu == "📖 데일리 암기장":
         st.success(f"🔥 {book_choice} - {target_day} 어휘 목록 (총 {len(day_df)}개 단어)")
         st.dataframe(day_df[['word', 'meaning']], use_container_width=True)
 
-# --- [메뉴 3] 실전 단어 테스트 ---
 elif menu == "📝 실전 단어 테스트":
     st.title("📝 실전 데일리 단어 테스트")
     
@@ -136,11 +153,15 @@ elif menu == "📝 실전 단어 테스트":
                         sampled_df = filtered_df.sample(n=q_count).reset_index(drop=True)
                         
                         questions = []
+                        
+                        # --- 유형 1: 뜻쓰기 객관식 시험지 빌드 ---
                         if config['type'] == "뜻쓰기":
-                            all_meanings = raw_df['meaning'].dropna().unique().tolist()
+                            all_meanings = list(raw_df['meaning'].dropna().str.strip().unique())
                             for _, row in sampled_df.iterrows():
-                                correct = row['meaning']
-                                wrong = random.sample([m for m in all_meanings if m != correct], min(3, len(all_meanings)-1))
+                                correct = str(row['meaning']).strip()
+                                wrong_pool = [m for m in all_meanings if m != correct]
+                                wrong = random.sample(wrong_pool, min(3, len(wrong_pool)))
+                                
                                 options = [correct] + wrong
                                 random.shuffle(options)
                                 questions.append({
@@ -149,16 +170,39 @@ elif menu == "📝 실전 단어 테스트":
                                     'options': options,
                                     'correct': correct
                                 })
+                                
+                        # --- 유형 2: 원장님 특제 문맥형 동의어 시험지 빌드 ---
                         else:
-                            all_syns = raw_df['synonym_1'].dropna().unique().tolist()
+                            # 오답용으로 쓸 전체 동의어 단어 리스트업 풀 구축
+                            syn_cols = [c for c in raw_df.columns if 'synonym' in c]
+                            all_syns_pool = []
+                            for col in syn_cols:
+                                all_syns_pool += raw_df[col].dropna().str.strip().tolist()
+                            all_syns_pool = list(set(all_syns_pool))
+                            
                             for _, row in sampled_df.iterrows():
-                                correct = row['synonym_1']
-                                wrong = random.sample([s for s in all_syns if s != correct], min(3, len(all_syns)-1))
+                                # 1. 해당 행에 존재하는 동의어(synonym 1~5) 목록 추려내기
+                                row_syns = []
+                                for col in syn_cols:
+                                    if col in row and pd.notna(row[col]) and str(row[col]).strip() != "":
+                                        row_syns.append(str(row[col]).strip())
+                                
+                                # 만약 동의어 데이터가 비어있다면 방어 코드 처리
+                                if not row_syns:
+                                    row_syns = ["N/A"]
+                                
+                                # 2. [원장님 지시] 입력된 동의어들 중 랜덤하게 1개를 문제의 '정답'으로 추출
+                                correct = random.choice(row_syns)
+                                
+                                # 3. [원장님 지시] 정답 단어와 철자/어근이 닮은 매력적인 오답 3개 추적 추출
+                                wrong = get_similar_words(correct, all_syns_pool, count=3)
+                                
                                 options = [correct] + wrong
                                 random.shuffle(options)
                                 
-                                word = str(row['word'])
-                                sentence = str(row['example_sentence'])
+                                # 4. 예문에서 문제 단어 찾아서 밑줄 및 볼드체 강조 표시
+                                word = str(row['word']).strip()
+                                sentence = str(row['example sentence'] if 'example sentence' in row else row['example_sentence']).strip()
                                 highlighted_sentence = re.sub(f"({re.escape(word)})", r"<u><b>\1</b></u>", sentence, flags=re.IGNORECASE)
                                 
                                 questions.append({
@@ -207,7 +251,6 @@ elif menu == "📝 실전 단어 테스트":
                         st.session_state.exam_started = False
                         st.session_state.current_questions = []
 
-# --- [메뉴 4] 원장님 전용 대시보드 ---
 elif menu == "🔒 원장님 전용 대시보드":
     st.title("🔒 원장님 전용 통합 관리 시스템")
     if "admin_authenticated" not in st.session_state: st.session_state.admin_authenticated = False
@@ -221,7 +264,6 @@ elif menu == "🔒 원장님 전용 대시보드":
             else:
                 st.error("비밀번호가 일치하지 않습니다.")
     else:
-        # 💡 에러의 주범이었던 size="small" 매개변수를 완전히 제거했습니다!
         if st.button("🔓 로그아웃"):
             st.session_state.admin_authenticated = False
             st.rerun()
