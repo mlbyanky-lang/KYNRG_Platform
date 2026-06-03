@@ -221,7 +221,8 @@ elif menu == "🔒 원장님 전용 대시보드":
             else:
                 st.error("비밀번호가 일치하지 않습니다.")
     else:
-        if st.button("🔓 로그아웃", size="small"):
+        # 💡 에러의 주범이었던 size="small" 매개변수를 완전히 제거했습니다!
+        if st.button("🔓 로그아웃"):
             st.session_state.admin_authenticated = False
             st.rerun()
             
