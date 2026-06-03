@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="김영편입 노량진 AI 통합 LMS", page_icon="🏫", layout="wide")
 
 # ==========================================
-# 0. 💥 유령 데이터(0번) 원천 차단 로드 엔진 💥
+# 0. 정제형 내부 로컬 데이터 로드 엔진
 # ==========================================
 @st.cache_data(ttl=60)
 def load_data(file_type, book_choice):
@@ -23,28 +23,23 @@ def load_data(file_type, book_choice):
             
     if not df.empty:
         try:
-            # 1. 컬럼명 양끝 공백 제거 및 소문자 통일 (정제 규격 일치)
+            # 1. 컬럼명 공백 제거 및 소문자 통일 (정제 규격 표준화)
             df.columns = df.columns.str.strip().str.lower()
-            
-            # 동의어 파일의 'example sentence' 등 기둥명 매핑용 정제
             df.rename(columns={'example sentence': 'example_sentence', 'synonym 1': 'synonym_1'}, inplace=True)
             
-            # 2. 🚨 [핵심 방어] 원본 파일 맨 밑의 빈 행이나 누락된(NaN) day 값 제거
+            # 2. 원본 파일 유령 데이터 제거 및 수치화
             df = df.dropna(subset=['day'])
-            
-            # 3. day 값을 순수 정수형(int)으로 강제 변환
             df['day'] = pd.to_numeric(df['day'], errors='coerce').fillna(1).astype(int)
-            
-            # 4. 🚨 [최종 차단] 빈 줄의 영향으로 발생한 0 이하의 쓰레기 데이터 행을 완벽히 삭제
             df = df[df['day'] >= 1]
-            
             return df.reset_index(drop=True)
         except Exception as e:
-            st.error(f"🚨 데이터 정제 중 오류 발생: {e}")
+            st.error(f"🚨 데이터 가공 중 분석 오류 발생: {e}")
             return pd.DataFrame()
     return df
 
-# 관리자 배포용 세션 제어값 초기화
+# ==========================================
+# 1. 전역 시스템 제어 및 DB 초기화 (Session State)
+# ==========================================
 if "test_active" not in st.session_state: st.session_state.test_active = False
 if "test_config" not in st.session_state: st.session_state.test_config = {}
 if "announcements" not in st.session_state:
@@ -69,7 +64,7 @@ if "exam_started" not in st.session_state: st.session_state.exam_started = False
 if "current_questions" not in st.session_state: st.session_state.current_questions = []
 
 # ==========================================
-# 1. 사이드바 메뉴 대시보드
+# 2. 사이드바 메뉴 대시보드
 # ==========================================
 st.sidebar.title("🏫 김영편입 노량진")
 menu = st.sidebar.radio("📌 시스템 메뉴 선택", [
@@ -82,9 +77,10 @@ st.sidebar.divider()
 st.sidebar.caption("© 2026 김영편입 AI 학습 관리 시스템")
 
 # ==========================================
-# 2. 메뉴별 기능 완벽 구현부
+# 3. 메뉴별 기능 완벽 구현부
 # ==========================================
 
+# --- [메뉴 1] 반별 공지사항 ---
 if menu == "📢 반별 공지사항":
     st.title("📢 반별 학습 공지사항")
     student_class = st.selectbox("본인의 소속 반을 선택하세요:", list(st.session_state.students_dict.keys()))
@@ -96,6 +92,7 @@ if menu == "📢 반별 공지사항":
     else:
         st.write("현재 등록된 공지사항이 없습니다.")
 
+# --- [메뉴 2] 데일리 암기장 ---
 elif menu == "📖 데일리 암기장":
     st.title("📖 데일리 플래시 암기장")
     col1, col2 = st.columns(2)
@@ -112,6 +109,7 @@ elif menu == "📖 데일리 암기장":
         st.success(f"🔥 {book_choice} - {target_day} 어휘 목록 (총 {len(day_df)}개 단어)")
         st.dataframe(day_df[['word', 'meaning']], use_container_width=True)
 
+# --- [메뉴 3] 실전 단어 테스트 ---
 elif menu == "📝 실전 단어 테스트":
     st.title("📝 실전 데일리 단어 테스트")
     
@@ -209,6 +207,7 @@ elif menu == "📝 실전 단어 테스트":
                         st.session_state.exam_started = False
                         st.session_state.current_questions = []
 
+# --- [메뉴 4] 원장님 전용 대시보드 ---
 elif menu == "🔒 원장님 전용 대시보드":
     st.title("🔒 원장님 전용 통합 관리 시스템")
     if "admin_authenticated" not in st.session_state: st.session_state.admin_authenticated = False
@@ -233,7 +232,6 @@ elif menu == "🔒 원장님 전용 대시보드":
             b_type = st.selectbox("1. 시험 유형 선택", ["뜻 맞추기", "동의어 예문 문맥형"])
             book = st.selectbox("2. 대상 어휘 교재 선택", ["MVP1", "MVP2"])
             
-            # 💡 최소 범위를 1로 완벽히 제어하여 슬라이더 상에서 0이 표현되지 않게 차단합니다.
             start_day, end_day = st.slider("3. 출제 진도 범위 지정 (DAY)", min_value=1, max_value=60, value=(1, 10), step=1)
             num_q = st.number_input("4. 출제할 총 문제 문항 수 지정", min_value=5, max_value=100, value=20, step=5)
             
