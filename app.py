@@ -38,37 +38,22 @@ def load_data(file_type, book_choice):
 # ⚙️ 편입 최적화 오답 메이커 (중복 절대 불가능 시스템)
 # ==========================================
 def build_quiz_options(correct_word, full_pool):
-    """
-    정답 단어 1개와 철자가 유사한 고유 오답 3개를 섞어 정확히 4개의 고유 보기 리스트를 반환합니다.
-    Streamlit 중복 보기 에러를 완벽히 차단합니다.
-    """
     correct_clean = str(correct_word).strip()
-    
-    # 전체 풀 정제 (소문자 변환 및 고유화)
     clean_pool = list(set([str(w).strip() for w in full_pool if pd.notna(w) and str(w).strip() != ""]))
-    
-    # 정답과 확실히 다른 오답 후보군 필터링 (대소문자 무시 매칭 차단)
     wrong_candidates = [w for w in clean_pool if w.lower() != correct_clean.lower()]
     
-    # 1차 추적: 앞 두 글자가 같은 철자 유사 어휘 수집
     prefix = correct_clean.lower()[:2] if len(correct_clean) >= 2 else correct_clean.lower()
     similar_pool = [w for w in wrong_candidates if w.lower().startswith(prefix)]
     
-    # 2차 추적: 철자 유사 어휘가 모자라면 길이가 비슷한 어휘 수집
     if len(similar_pool) < 3:
         similar_pool += [w for w in wrong_candidates if abs(len(w) - len(correct_clean)) <= 2 and w not in similar_pool]
         
-    # 3차 추적: 그래도 모자라면 전체 오답 풀에서 수급
     if len(similar_pool) < 3:
         similar_pool += [w for w in wrong_candidates if w not in similar_pool]
         
-    # 최종 무작위 오답 3개 확정
     chosen_wrongs = random.sample(similar_pool, min(3, len(similar_pool)))
-    
-    # 정답 + 오답 합치기 및 고유성 재검증
     final_options = list(set([correct_clean] + chosen_wrongs))
     
-    # 만약 set 과정에서 4개가 안 채워졌다면 강제 채우기 패딩
     while len(final_options) < 4 and wrong_candidates:
         extra = random.choice(wrong_candidates)
         if extra not in final_options:
@@ -161,6 +146,7 @@ elif menu == "📝 실전 뜻찾기 테스트":
         st.warning("🔒 현재 활성화된 뜻찾기 시험이 없습니다. 원장님이 시험을 출제할 때까지 대기해 주세요.")
     else:
         config = st.session_state.mean_test_config
+        # 💡 [버그 수정] config에서 안전하게 정보를 호출하도록 보정
         st.info(f"🎯 **뜻찾기 활성 시험:** {config['book']} | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
         
         col1, col2 = st.columns(2)
@@ -238,6 +224,7 @@ elif menu == "📝 실전 동의어 테스트":
         st.warning("🔒 현재 활성화된 동의어 문맥 시험이 없습니다. 원장님이 시험을 출제할 때까지 대기해 주세요.")
     else:
         config = st.session_state.syn_test_config
+        # 💡 [버그 수정] config에서 안전하게 정보를 호출하도록 보정
         st.info(f"🎯 **동의어 활성 시험:** {config['book']} | **범위:** DAY {config['start']} ~ {config['end']} ({config['num_q']}문항)")
         
         col1, col2 = st.columns(2)
@@ -253,7 +240,6 @@ elif menu == "📝 실전 동의어 테스트":
                     if len(filtered_df) == 0:
                         st.error("지정 범위 내에 단어 데이터가 부족합니다.")
                     else:
-                        # 표제어 문제 단어 자체의 중복을 배제
                         unique_words = filtered_df['word'].drop_duplicates().tolist()
                         random.shuffle(unique_words)
                         q_count = min(config['num_q'], len(unique_words))
@@ -261,19 +247,17 @@ elif menu == "📝 실전 동의어 테스트":
                         
                         sampled_df = pd.concat([filtered_df[filtered_df['word'] == w].sample(n=1) for w in target_words]).reset_index(drop=True)
                         
-                        # 동의어 컬럼(synonym 1~5) 추적
                         syn_cols = [c for c in raw_df.columns if 'synonym' in c]
+                        all_words_pool = list(raw_df['word'].dropna().str.strip().unique())
                         
-                        # 교재 전체에서 오답으로 조립할 유효 풀 구성
                         all_syns_pool = []
                         for col in syn_cols:
                             if col in raw_df.columns:
                                 all_syns_pool += raw_df[col].dropna().astype(str).str.strip().tolist()
-                        all_syns_pool = list(set(all_syns_pool))
+                        all_syns_pool = list(set(all_syns_pool)) if all_syns_pool else all_words_pool
                         
                         questions = []
                         for _, row in sampled_df.iterrows():
-                            # 해당 단어 행의 유효 정답 수집
                             row_syns = []
                             for col in syn_cols:
                                 if col in row and pd.notna(row[col]) and str(row[col]).strip() != "":
@@ -281,14 +265,94 @@ elif menu == "📝 실전 동의어 테스트":
                                     if val.lower() not in ['nan', 'none', '']:
                                         row_syns.append(val)
                             
-                            # 동의어가 비어있을 시 가드 코드
                             if not row_syns: 
                                 row_syns = [str(row['word']).strip()]
                             
-                            # 1. 동의어 중 1개를 랜덤하게 정답으로 확정
                             correct = random.choice(row_syns)
-                            
-                            # 2. [💥 버그 박멸] 중복 에러가 절대 나지 않는 4지선다형 철자 유사 보기 조립
                             options = build_quiz_options(correct, all_syns_pool)
                             
-                            # 3. 예문 하이라이트
+                            word = str(row['word']).strip()
+                            sentence_col = 'example sentence' if 'example sentence' in row.index else ('example_sentence' if 'example_sentence' in row.index else raw_df.columns[2])
+                            sentence = str(row[sentence_col]).strip()
+                            highlighted_sentence = re.sub(f"({re.escape(word)})", r"<u><b>\1</b></u>", sentence, flags=re.IGNORECASE)
+                            
+                            questions.append({
+                                'title': f"다음 문장의 밑줄 친 단어와 **가장 문맥상 뜻이 가까운 동의어**를 고르시오.",
+                                'context': highlighted_sentence,
+                                'options': options,
+                                'correct': correct
+                            })
+                        
+                        st.session_state.current_questions = questions
+                        st.session_state.current_exam_type = "동의어"
+                        st.session_state.exam_started = True
+                        st.rerun()
+                        
+        if st.session_state.exam_started and st.session_state.current_exam_type == "동의어":
+            st.subheader(f"✍️ {s_name} 학생의 동의어 문맥 시험지")
+            with st.form("syn_exam_form"):
+                student_answers = []
+                for i, q in enumerate(st.session_state.current_questions):
+                    st.markdown(f"##### **[Q{i+1}]** {q['title']}")
+                    st.markdown(f"> {q['context']}", unsafe_allow_html=True)
+                    user_ans = st.radio(f"보기 선택 (Q{i+1})", q['options'], key=f"syn_ans_{i}", index=None, label_visibility="collapsed")
+                    student_answers.append(user_ans)
+                    st.divider()
+                
+                if st.form_submit_button("🎯 최종 답안 제출 및 자동 채점"):
+                    if None in student_answers:
+                        st.warning("⚠️ 풀지 않은 문항이 있습니다. 모든 문제의 답을 체크해 주세요.")
+                    else:
+                        correct_count = sum([1 for u_a, q in zip(student_answers, st.session_state.current_questions) if u_a == q['correct']])
+                        score = int((correct_count / len(student_answers)) * 100)
+                        
+                        st.session_state.exam_results.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "class": s_class, "name": s_name, "type": "동의어",
+                            "test_name": f"{config['book']}_DAY{config['start']}~{config['end']}", "score": score
+                        })
+                        st.balloons()
+                        st.success(f"💯 제출 완료! 점수: **{score}점**")
+                        st.session_state.exam_started = False
+                        st.session_state.current_questions = []
+
+# --- [메뉴 4] 원장님 전용 대시보드 ---
+elif menu == "🔒 원장님 전용 대시보드":
+    st.title("🔒 원장님 전용 통합 관리 시스템")
+    if "admin_authenticated" not in st.session_state: st.session_state.admin_authenticated = False
+    
+    if not st.session_state.admin_authenticated:
+        admin_pw = st.text_input("원장님 마스터 비밀번호를 입력하세요:", type="password")
+        if st.button("로그인"):
+            if admin_pw == "1234":
+                st.session_state.admin_authenticated = True
+                st.rerun()
+            else: st.error("비밀번호가 일치하지 않습니다.")
+    else:
+        if st.button("🔓 로그아웃"):
+            st.session_state.admin_authenticated = False
+            st.rerun()
+            
+        tab1, tab2, tab3 = st.tabs(["📝 테스트 개별 배포 제어기", "📊 실시간 성적 및 미응시생 파악", "👨‍🎓 학생 명부 & 공지 제어"])
+        
+        with tab1:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("📢 뜻찾기 테스트 실시간 배포")
+                m_book = st.selectbox("교재 선택 (뜻)", ["MVP1", "MVP2"])
+                m_start, m_end = st.slider("진도 범위 (뜻 DAY)", 1, 60, (1, 10), key="m_slide")
+                m_num = st.number_input("출제 문항 수 (뜻)", min_value=5, max_value=100, value=20, step=5, key="m_num")
+                if st.button("🚀 뜻찾기 시험 배포/활성화", use_container_width=True):
+                    st.session_state.mean_test_active = True
+                    st.session_state.mean_test_config = {"book": m_book, "start": m_start, "end": m_end, "num_q": m_num}
+                    st.success("뜻찾기 시험지가 오픈되었습니다.")
+                if st.button("🛑 뜻찾기 시험 마감/종료", use_container_width=True):
+                    st.session_state.mean_test_active = False
+                    st.info("뜻찾기 시험이 마감되었습니다.")
+                    
+            with col2:
+                st.subheader("📢 동의어 문맥 테스트 실시간 배포")
+                s_book = st.selectbox("교재 선택 (동의어)", ["MVP1", "MVP2"])
+                s_start, s_end = st.slider("진도 범위 (동의어 DAY)", 1, 60, (1, 10), key="s_slide")
+                s_num = st.number_input("출제 문항 수 (동의어)", min_value=5, max_value=100, value=20, step=5, key="s_num")
+                if st.button("
